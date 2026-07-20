@@ -72,12 +72,17 @@ NEAR_MIN = 8.0           # floor for r_flashlightnear. Stock is 4, which lets
                          # pushed out slightly as range grows (see map below).
 NEAR_MAX = 24.0
 
-AMBIENT_MIN = 0.05       # r_flashlightambient adds fill light inside the
-AMBIENT_MAX = 0.60       # beam frustum; >0.6 starts washing out the scene.
+AMBIENT_MIN = 0.05       # r_flashlightambient floods the whole beam frustum
+AMBIENT_MAX = 0.80       # with flat light -- the "fill the room" knob. >0.8
+                         # washes out the scene completely.
 
-FOV_WIDE = 50.0          # r_flashlightfov at range slider 0
-FOV_NARROW = 42.0        # ...focusing slightly tighter at slider 100
-                         # (stock is 45; this keeps the beam sane either way)
+FOV_WIDE = 58.0          # r_flashlightfov at range slider 0
+FOV_NARROW = 50.0        # ...focusing slightly tighter at slider 100.
+                         # Stock is 45; wider = the beam covers more of the
+                         # room at the cost of per-area intensity. Past ~90
+                         # the projection visibly distorts. (Cheat-gated:
+                         # only applies where the cfg can run, e.g. maps or
+                         # servers with sv_cheats 1.)
 
 
 def map_sliders_to_cvars(brightness, range_pct):
@@ -151,8 +156,12 @@ def build_cfg_text(cvars):
 
 COOKIE_SIZE = 256        # texture resolution (power of two)
 PLATEAU_MIN = 0.30       # radius fraction at FULL intensity, brightness 0...
-PLATEAU_MAX = 0.80       # ...and brightness 100 (bigger = brighter, harder
-                         # edge; 1.0 would be a hard-edged fullbright disc)
+PLATEAU_MAX = 0.86       # ...and brightness 100. The engine stretches this
+                         # texture across the flashlight's whole projection
+                         # cone, so dark edge texels are wasted beam angle --
+                         # at max brightness the lit disc runs nearly to the
+                         # texture border and fills almost the entire cone.
+                         # (1.0 would be a hard-edged disc with no soft rim.)
 GAIN_MIN = 0.55          # overall luminance scale at brightness 0
 GAIN_MAX = 1.00          # at brightness 100 the center hits pure 255 white
 CORE_WHITENESS = 0.70    # how strongly the hot region desaturates to white
@@ -486,7 +495,10 @@ def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
         "  left4dead2/cfg/autoexec.cfg. Note that most r_flashlight*",
         "  cvars are cheat-gated outside single player / local servers",
         "  with sv_cheats 1 -- if the console says 'cheat cvar', the",
-        "  texture override above is still doing its job.",
+        "  texture override above is still doing its job. On maps or",
+        "  servers where sv_cheats IS on (many workshop maps enable it",
+        "  when loaded via the console), exec the cfg to get the wider",
+        "  beam fov and the ambient room fill on top of the texture.",
     ]
     lines += [
         "",
