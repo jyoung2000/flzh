@@ -115,6 +115,10 @@ def map_sliders_to_cvars(brightness, range_pct):
         "r_flashlightquadratic": 0,
         "r_flashlightambient": round(ambient, 2),
         "r_flashlightfov": round(fov, 1),
+        # Not present on every Source branch (unknown cvars are just ignored
+        # with a console note); where it exists it scales beam intensity
+        # directly, so ride the brightness slider from stock-ish 0.25 to 1.
+        "r_flashlightbrightness": round(0.25 + 0.75 * b, 2),
     }
 
 
@@ -136,13 +140,25 @@ def build_cfg_text(cvars):
 # ---------------------------------------------------------------------------
 # Hue is not a cvar: the beam color comes from the spotlight "cookie" texture
 # the engine projects (materials/effects/flashlight001). We regenerate that
-# cookie tinted to the chosen hue. Tuning knobs:
+# cookie tinted to the chosen hue.
+#
+# Brightness is baked into this texture too, not just the cfg: most
+# r_flashlight* cvars are cheat-gated outside single player / sv_cheats, so
+# the cookie is the one brightness control that works everywhere. The engine
+# multiplies the projected light by this texture, so a flat, near-white disc
+# is the brightest legal flashlight there is ("fullbright-style"); a dark,
+# steep gradient dims it no matter what the cvars say. Tuning knobs:
 
 COOKIE_SIZE = 256        # texture resolution (power of two)
-EDGE_GAMMA = 1.7         # falloff shape: higher = tighter, dimmer edges
-CORE_POWER = 3.0         # size of the white-hot center (higher = smaller)
-CORE_WHITENESS = 0.85    # how strongly the center desaturates toward white
-TINT_SAT = 0.80          # saturation of the tint at the beam edges (1.0 =
+PLATEAU_MIN = 0.30       # radius fraction at FULL intensity, brightness 0...
+PLATEAU_MAX = 0.80       # ...and brightness 100 (bigger = brighter, harder
+                         # edge; 1.0 would be a hard-edged fullbright disc)
+GAIN_MIN = 0.55          # overall luminance scale at brightness 0
+GAIN_MAX = 1.00          # at brightness 100 the center hits pure 255 white
+CORE_WHITENESS = 0.70    # how strongly the hot region desaturates to white
+                         # (color lives in the rim; raise TINT color at the
+                         # cost of raw brightness by lowering this)
+TINT_SAT = 0.80          # saturation of the tint at the beam rim (1.0 =
                          # fully saturated color, 0 = plain white beam)
 
 
@@ -151,16 +167,22 @@ def hue_to_rgb(hue_deg, sat=TINT_SAT, val=1.0):
     return colorsys.hsv_to_rgb((hue_deg % 360.0) / 360.0, sat, val)
 
 
-def build_cookie_image(hue_deg, size=COOKIE_SIZE):
+def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
     """Build the tinted spotlight cookie as a Pillow RGBA image.
 
-    A radial gradient: white-hot tinted center falling off to pure black at
-    the border (the border MUST be black -- with texture clamping it defines
-    the beam edge; any non-black rim would smear light across the whole cone).
+    Shape: a flat full-intensity plateau (sized by the brightness slider)
+    with a smoothstep roll-off to pure black at the border. The border MUST
+    be black -- with texture clamping it defines the beam edge; any non-black
+    rim would smear light across the whole cone. The center is white-hot,
+    with the hue tint strongest in the roll-off rim (which is also how real
+    colored lights read, and what the preview canvas mimics).
     """
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow is not installed; cannot build the cookie")
 
+    b = max(0.0, min(100.0, float(brightness))) / 100.0
+    plateau = PLATEAU_MIN + (PLATEAU_MAX - PLATEAU_MIN) * b
+    gain = GAIN_MIN + (GAIN_MAX - GAIN_MIN) * b
     tint = hue_to_rgb(hue_deg)
     half = size / 2.0
     pixels = []
@@ -168,13 +190,18 @@ def build_cookie_image(hue_deg, size=COOKIE_SIZE):
         for x in range(size):
             # Radius normalized so 1.0 lands just inside the bitmap edge.
             r = math.hypot(x - half + 0.5, y - half + 0.5) / (half - 2.0)
-            base = max(0.0, 1.0 - r) ** EDGE_GAMMA      # radial falloff
-            core = base ** CORE_POWER                    # hot center weight
-            w = core * CORE_WHITENESS
+            if r >= 1.0:
+                intensity = 0.0
+            elif r <= plateau:
+                intensity = 1.0
+            else:
+                u = (r - plateau) / (1.0 - plateau)
+                intensity = 1.0 - (3.0 * u * u - 2.0 * u * u * u)
+            w = CORE_WHITENESS * intensity * intensity   # white-hot center
             px = []
             for c in tint:
                 col = c + (1.0 - c) * w                  # lerp tint -> white
-                px.append(int(round(255.0 * col * base)))
+                px.append(int(round(255.0 * col * intensity * gain)))
             pixels.append((px[0], px[1], px[2], 255))
     img = Image.new("RGBA", (size, size))
     img.putdata(pixels)
@@ -419,7 +446,7 @@ def build_addoninfo(cvars, hue_deg, tinted):
     )
 
 
-def build_readme(cvars, hue_deg, tinted, tint_note):
+def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
     lines = [
         "Custom Flashlight VPK -- generated by " + APP_TITLE,
         "=" * 60,
@@ -429,8 +456,25 @@ def build_readme(cvars, hue_deg, tinted, tint_note):
         "    Steam/steamapps/common/Left 4 Dead 2/left4dead2/addons/",
         "  Then enable it in the in-game Add-ons menu if it is not already.",
         "",
-        "BRIGHTNESS / RANGE (cvars -- one console command needed)",
-        "  The VPK ships cfg/flashlight_bright.cfg with:",
+        "BRIGHTNESS + BEAM COLOR (texture override -- works automatically)",
+    ]
+    if tinted:
+        lines += [
+            "  The addon replaces the spotlight cookie texture",
+            "  materials/effects/flashlight001.vtf with one baked at %d%%" %
+            round(brightness if brightness is not None else 100),
+            "  brightness and hue %d deg. The engine multiplies the beam" %
+            round(hue_deg),
+            "  by this texture, so the brighter/flatter cookie brightens",
+            "  the flashlight everywhere -- no console commands, and it",
+            "  cannot be blocked by cheat-gated cvars.",
+        ]
+    else:
+        lines += ["  " + ln for ln in tint_note.splitlines()]
+    lines += [
+        "",
+        "EXTRA KICK: RANGE / ATTENUATION CVARS (optional, one command)",
+        "  The VPK also ships cfg/flashlight_bright.cfg with:",
     ]
     lines += ["    %s %s" % (k, v) for k, v in cvars.items()]
     lines += [
@@ -439,20 +483,11 @@ def build_readme(cvars, hue_deg, tinted, tint_note):
         "  and run:",
         "      exec flashlight_bright.cfg",
         "  To apply it every session, add that line to",
-        "  left4dead2/cfg/autoexec.cfg.",
-        "",
-        "BEAM COLOR (texture override)",
+        "  left4dead2/cfg/autoexec.cfg. Note that most r_flashlight*",
+        "  cvars are cheat-gated outside single player / local servers",
+        "  with sv_cheats 1 -- if the console says 'cheat cvar', the",
+        "  texture override above is still doing its job.",
     ]
-    if tinted:
-        lines += [
-            "  The beam is tinted to hue %d deg by replacing the spotlight" %
-            round(hue_deg),
-            "  cookie texture materials/effects/flashlight001.vtf. This",
-            "  applies automatically while the addon is enabled -- no",
-            "  console command needed.",
-        ]
-    else:
-        lines += ["  " + ln for ln in tint_note.splitlines()]
     lines += [
         "",
         "NOTES / LIMITATIONS",
@@ -460,9 +495,6 @@ def build_readme(cvars, hue_deg, tinted, tint_note):
         "    rendering only. Other players never see it.",
         "  * Some servers disable addons entirely, and servers with",
         "    consistency checking may block the texture override.",
-        "  * Some r_flashlight* cvars are cheat-flagged in certain modes.",
-        "    If the console says 'cheat cvar', the cfg only applies in",
-        "    single player / local servers with sv_cheats 1.",
         "  * This is a tuned flashlight, not engine mat_fullbright: it",
         "    brightens the beam, it does not remove darkness everywhere.",
         "",
@@ -508,10 +540,12 @@ def generate_vpk(brightness, range_pct, hue_deg, out_dir, tint_enabled=True):
         "cfg/flashlight_bright.cfg": build_cfg_text(cvars).encode("utf-8"),
     }
     if tinted:
-        cookie = build_cookie_image(hue_deg)
+        # Brightness is baked into the cookie as well as the cfg -- the
+        # texture is the one control cheat-gated servers can't ignore.
+        cookie = build_cookie_image(hue_deg, brightness)
         files["materials/effects/flashlight001.vtf"] = build_vtf(cookie)
 
-    readme = build_readme(cvars, hue_deg, tinted, tint_note)
+    readme = build_readme(cvars, hue_deg, tinted, tint_note, brightness)
     files["readme.txt"] = readme.encode("utf-8")
 
     vpk_path = os.path.join(out_dir, VPK_BASENAME)
@@ -591,7 +625,8 @@ def run_gui():
             row += 1
 
             self.tint_check = tk.Checkbutton(
-                root, text="Tint beam texture with hue (needs Pillow)",
+                root,
+                text="Bake brightness + hue into beam texture (needs Pillow)",
                 variable=self.tint_on, command=self._on_change,
                 bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
                 selectcolor=ACCENT, anchor="w")
@@ -602,9 +637,11 @@ def run_gui():
                 self.tint_on.set(False)
                 self.tint_check.configure(state="disabled")
                 tk.Label(root, fg="#e0a94a", bg=BG, anchor="w", justify="left",
-                         text=("Pillow not found -- hue tint disabled. "
-                               "Install it with:  pip install pillow\n"
-                               "Brightness/range VPKs still build fine.")
+                         text=("Pillow not found -- beam texture disabled "
+                               "(install with:  pip install pillow).\n"
+                               "The VPK still builds, but brightness then "
+                               "relies on cvars that many servers "
+                               "cheat-gate.")
                          ).grid(row=row, column=0, columnspan=3, sticky="we",
                                 **pad)
                 row += 1

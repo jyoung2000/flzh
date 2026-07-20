@@ -34,8 +34,8 @@ containing:
 
 | File in VPK | Purpose |
 |---|---|
-| `cfg/flashlight_bright.cfg` | Brightness/range cvars (`r_flashlightfar`, `r_flashlightlinear`, …). Apply in-game with `exec flashlight_bright.cfg` in the developer console. |
-| `materials/effects/flashlight001.vtf` | Hue-tinted spotlight cookie (a real VTF v7.2 written in pure Python) that replaces the stock beam texture, coloring the beam automatically. |
+| `materials/effects/flashlight001.vtf` | Spotlight cookie (a real VTF v7.2 written in pure Python) replacing the stock beam texture, with **brightness and hue baked in** — a flatter, whiter disc is a brighter flashlight. Applies automatically while the addon is enabled and works even where cvars are cheat-gated. |
+| `cfg/flashlight_bright.cfg` | Optional extra kick: range/attenuation cvars (`r_flashlightfar`, `r_flashlightlinear`, …). Apply in-game with `exec flashlight_bright.cfg` in the developer console; most are cheat-gated outside single player / local servers. |
 | `addoninfo.txt`, `readme.txt` | Addon metadata + install/usage notes. |
 
 Install by copying the `.vpk` into
@@ -48,8 +48,9 @@ success is reported.
 ## Notes
 
 * Client-side and local-only; other players don't see it, some servers
-  disable addons, and some `r_flashlight*` cvars are cheat-flagged outside
-  single player / local servers.
+  disable addons, and most `r_flashlight*` cvars are cheat-flagged outside
+  single player / local servers — which is why brightness is baked into the
+  beam texture rather than left to the cfg.
 * The preview canvas is an approximation for tuning, not a game-accurate
   render.
 * Brightness/near-plane clamps are enforced so you can't generate a config
