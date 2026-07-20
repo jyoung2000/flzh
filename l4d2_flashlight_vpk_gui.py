@@ -25,7 +25,8 @@ brightness/range VPK and says so.
 
 Run the GUI:      python3 l4d2_flashlight_vpk_gui.py
 Headless build:   python3 l4d2_flashlight_vpk_gui.py --nogui \
-                      --brightness 70 --range 60 --hue 120 --out ./build
+                      --brightness 90 --width 80 --range 70 --hue 120 \
+                      --out ./build
 """
 
 import argparse
@@ -63,8 +64,12 @@ LINEAR_BRIGHTEST = 15.0  # hard floor at slider 100. Below ~15 the beam blows
                          # out nearby geometry to pure white; raise this floor
                          # for more safety margin, lower it at your own risk.
 
-FAR_MIN = 400.0          # r_flashlightfar at range slider 0 (stock is 750)
-FAR_MAX = 3000.0         # r_flashlightfar at range slider 100
+FAR_MIN = 750.0          # r_flashlightfar at range slider 0 (== stock 750)
+FAR_MAX = 4000.0         # r_flashlightfar at range slider 100 -- the "longer"
+                         # knob: how many units the beam reaches before it
+                         # cuts off. Default 750; 4000 is a very long throw.
+                         # Cheat-gated (see FOV note); applies where the cfg
+                         # can run (maps/servers with sv_cheats 1).
 
 NEAR_MIN = 8.0           # floor for r_flashlightnear. Stock is 4, which lets
                          # you blind yourself point-blank against a wall; 8+
@@ -76,22 +81,28 @@ AMBIENT_MIN = 0.05       # r_flashlightambient floods the whole beam frustum
 AMBIENT_MAX = 0.80       # with flat light -- the "fill the room" knob. >0.8
                          # washes out the scene completely.
 
-FOV_WIDE = 58.0          # r_flashlightfov at range slider 0
-FOV_NARROW = 50.0        # ...focusing slightly tighter at slider 100.
-                         # Stock is 45; wider = the beam covers more of the
-                         # room at the cost of per-area intensity. Past ~90
-                         # the projection visibly distorts. (Cheat-gated:
-                         # only applies where the cfg can run, e.g. maps or
-                         # servers with sv_cheats 1.)
+FOV_MIN = 53.0           # r_flashlightfov at width slider 0 (== L4D2 stock 53
+FOV_MAX = 90.0           # degrees). The "wider" knob: the cone half-angle.
+                         # Width 100 -> a 90-degree cone, far wider than stock
+                         # -- lights much more of the room, dimmer per-area
+                         # (raise Brightness to compensate). Past ~90 the
+                         # projection distorts badly. Cheat-gated: r_flashlight
+                         # cvars are FCVAR_CHEAT in L4D2, so this only takes
+                         # effect where sv_cheats is on (e.g. a map loaded via
+                         # the console). Where cheats are off, the beam width
+                         # is whatever the cookie texture fills (also driven by
+                         # the Width slider), capped at the fixed engine cone.
 
 
-def map_sliders_to_cvars(brightness, range_pct):
-    """Map brightness/range slider values (0-100) to clamped flashlight cvars.
+def map_sliders_to_cvars(brightness, range_pct, width_pct=100):
+    """Map slider values (0-100) to clamped flashlight cvars.
 
+    brightness -> intensity, range -> reach/length, width -> cone angle.
     Returns a dict of cvar name -> numeric value.
     """
     b = max(0.0, min(100.0, float(brightness))) / 100.0
     r = max(0.0, min(100.0, float(range_pct))) / 100.0
+    w = max(0.0, min(100.0, float(width_pct))) / 100.0
 
     # Brightness: interpolate linear attenuation on a log curve so each slider
     # step feels like an even perceptual change (400 -> 15 spans ~27x; a
@@ -108,10 +119,10 @@ def map_sliders_to_cvars(brightness, range_pct):
     # A touch of ambient fill that grows with brightness.
     ambient = AMBIENT_MIN + (AMBIENT_MAX - AMBIENT_MIN) * b
 
-    fov = FOV_WIDE + (FOV_NARROW - FOV_WIDE) * r
+    fov = FOV_MIN + (FOV_MAX - FOV_MIN) * w
 
     return {
-        "r_flashlightfar": round(far, 1),
+        "r_flashlightfar": round(far, 1),          # reach / length (Range)
         "r_flashlightnear": round(near, 1),
         # constant=1 caps the attenuation denominator at >=1, so intensity can
         # never diverge at zero distance -- the other half of whiteout safety.
@@ -119,7 +130,7 @@ def map_sliders_to_cvars(brightness, range_pct):
         "r_flashlightlinear": round(linear, 1),
         "r_flashlightquadratic": 0,
         "r_flashlightambient": round(ambient, 2),
-        "r_flashlightfov": round(fov, 1),
+        "r_flashlightfov": round(fov, 1),          # cone width / angle (Width)
         # Not present on every Source branch (unknown cvars are just ignored
         # with a console note); where it exists it scales beam intensity
         # directly, so ride the brightness slider from stock-ish 0.25 to 1.
@@ -131,8 +142,17 @@ def build_cfg_text(cvars):
     """Render the cvars as cfg/flashlight_bright.cfg content."""
     lines = [
         "// Custom flashlight settings -- generated by " + APP_TITLE,
-        "// Apply from the developer console:  exec flashlight_bright.cfg",
-        "// (Enable the console: Options > Keyboard/Mouse > Allow Developer Console)",
+        "// These r_flashlight* cvars are FCVAR_CHEAT in L4D2, so they only",
+        "// take effect when sv_cheats is on. To use them:",
+        "//   1. Main Menu > Options > enable the Developer Console.",
+        "//   2. Load a map FROM THE CONSOLE so cheats turn on, e.g.:",
+        "//        map c1m1_hotel        (use the map's own chapter name)",
+        "//      Starting from the lobby/campaign menu keeps cheats OFF.",
+        "//   3. Once in-game, apply these settings:",
+        "//        exec flashlight_bright.cfg",
+        "//      (or bind a key:  bind l \"exec flashlight_bright.cfg\")",
+        "// Where cheats stay off, these lines are ignored and the beam is",
+        "// whatever the packed cookie texture provides.",
         "",
     ]
     lines += ["{} {}".format(name, value) for name, value in cvars.items()]
@@ -155,29 +175,29 @@ def build_cfg_text(cvars):
 # steep gradient dims it no matter what the cvars say. Tuning knobs:
 
 COOKIE_SIZE = 256        # texture resolution (power of two)
-PLATEAU_MIN = 0.30       # radius fraction at FULL intensity, brightness 0...
-PLATEAU_MAX = 0.94       # ...and brightness 100. The engine stretches this
+PLATEAU_MIN = 0.30       # radius fraction at FULL intensity, width 0...
+PLATEAU_MAX = 0.94       # ...and width 100. The engine stretches this
                          # texture across the flashlight's whole projection
                          # cone, so dark edge texels are wasted beam angle --
-                         # at max brightness the lit area runs nearly to the
+                         # at max width the lit area runs nearly to the
                          # texture border and fills almost the entire cone.
                          # (1.0 would be a hard-edged shape with no soft rim.)
-SHAPE_POW_MIN = 2.0      # superellipse exponent at brightness 0: 2 = circle
-SHAPE_POW_MAX = 12.0     # ...at brightness 100: the frustum cross-section is
+SHAPE_POW_MIN = 2.0      # superellipse exponent at width 0: 2 = circle
+SHAPE_POW_MAX = 12.0     # ...at width 100: the frustum cross-section is
                          # SQUARE (texture mapped edge-to-edge), so a circle
                          # inscribes it and wastes the corners. Raising the
                          # exponent morphs the shape toward a rounded
                          # rectangle that covers ~97% of the frustum -- the
                          # widest beam possible without the cheat-gated fov.
-V_STRETCH_MAX = 1.22     # vertical axis scale at brightness 100 (1.0 at 0).
+V_STRETCH_MAX = 1.22     # vertical axis scale at width 100 (1.0 at width 0).
                          # >1 stretches the lit shape past the top/bottom of
                          # the texture, so the beam runs full-bleed to the
                          # frustum's upper and lower edges. Kept > H_STRETCH so
                          # the beam stays a taller-than-wide portrait shape for
                          # more ceiling/floor. Raise toward ~1.3 for an even
                          # squarer top/bottom edge; 1.0 = no vertical stretch.
-H_STRETCH_MAX = 1.12     # horizontal axis scale at brightness 100 (1.0 at 0).
-                         # Same idea sideways: at max brightness the lit shape
+H_STRETCH_MAX = 1.12     # horizontal axis scale at width 100 (1.0 at width 0).
+                         # Same idea sideways: at max width the lit shape
                          # also overshoots the left/right texture edges, so the
                          # rectangle reaches ALL FOUR frustum edges -- ~100% of
                          # the projection cone lit, the absolute non-cheat cap.
@@ -198,12 +218,18 @@ def hue_to_rgb(hue_deg, sat=TINT_SAT, val=1.0):
     return colorsys.hsv_to_rgb((hue_deg % 360.0) / 360.0, sat, val)
 
 
-def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
+def build_cookie_image(hue_deg, brightness=100.0, width=100.0,
+                       size=COOKIE_SIZE):
     """Build the tinted spotlight cookie as a Pillow RGBA image.
 
-    Shape: a flat full-intensity plateau (sized by the brightness slider)
-    with a smoothstep roll-off toward the border. At low/mid brightness the
-    rim rolls off to pure black, giving a soft-edged beam. At high brightness
+    Width controls how much of the projection frustum the beam fills (the
+    lit shape + stretch); Brightness controls how intense it is (gain). The
+    two are orthogonal: a narrow bright spot is low Width + high Brightness;
+    a big dim wash is high Width + low Brightness.
+
+    Shape: a flat full-intensity plateau (sized by the width slider)
+    with a smoothstep roll-off toward the border. At low/mid width the
+    rim rolls off to pure black, giving a soft-edged beam. At high width
     the plateau + axis stretch push the lit area past the texture edges, so
     the beam fills the whole projection frustum with a crisp rectangular
     edge. That is safe here: the engine bounds the flashlight to its frustum
@@ -216,11 +242,14 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
         raise RuntimeError("Pillow is not installed; cannot build the cookie")
 
     b = max(0.0, min(100.0, float(brightness))) / 100.0
-    plateau = PLATEAU_MIN + (PLATEAU_MAX - PLATEAU_MIN) * b
+    wd = max(0.0, min(100.0, float(width))) / 100.0
+    # Width -> how much of the frustum is lit (plateau, shape, stretch).
+    plateau = PLATEAU_MIN + (PLATEAU_MAX - PLATEAU_MIN) * wd
+    shape_pow = SHAPE_POW_MIN + (SHAPE_POW_MAX - SHAPE_POW_MIN) * wd
+    v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * wd
+    h_stretch = 1.0 + (H_STRETCH_MAX - 1.0) * wd
+    # Brightness -> luminance of whatever is lit.
     gain = GAIN_MIN + (GAIN_MAX - GAIN_MIN) * b
-    shape_pow = SHAPE_POW_MIN + (SHAPE_POW_MAX - SHAPE_POW_MIN) * b
-    v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * b
-    h_stretch = 1.0 + (H_STRETCH_MAX - 1.0) * b
     tint = hue_to_rgb(hue_deg)
     half = size / 2.0
     pixels = []
@@ -526,23 +555,26 @@ def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
         lines += ["  " + ln for ln in tint_note.splitlines()]
     lines += [
         "",
-        "EXTRA KICK: RANGE / ATTENUATION CVARS (optional, one command)",
-        "  The VPK also ships cfg/flashlight_bright.cfg with:",
+        "LONGER + WIDER BEAM: THE CVARS (needs cheats; the real size lever)",
+        "  Beam LENGTH (r_flashlightfar, stock 750) and WIDTH/cone angle",
+        "  (r_flashlightfov, stock 53) are only changeable via cvars, and",
+        "  those cvars are FCVAR_CHEAT in L4D2. The texture above already",
+        "  fills the fixed cone, but making the CONE ITSELF bigger needs",
+        "  sv_cheats on. The VPK ships cfg/flashlight_bright.cfg with:",
     ]
     lines += ["    %s %s" % (k, v) for k, v in cvars.items()]
     lines += [
-        "  Cvars are not applied automatically by an addon. Open the",
-        "  developer console (enable it under Options > Keyboard/Mouse)",
-        "  and run:",
-        "      exec flashlight_bright.cfg",
-        "  To apply it every session, add that line to",
-        "  left4dead2/cfg/autoexec.cfg. Note that most r_flashlight*",
-        "  cvars are cheat-gated outside single player / local servers",
-        "  with sv_cheats 1 -- if the console says 'cheat cvar', the",
-        "  texture override above is still doing its job. On maps or",
-        "  servers where sv_cheats IS on (many workshop maps enable it",
-        "  when loaded via the console), exec the cfg to get the wider",
-        "  beam fov and the ambient room fill on top of the texture.",
+        "  To use it (this is how you get a genuinely longer/wider beam):",
+        "    1. Options > enable the Developer Console.",
+        "    2. Load a map FROM THE CONSOLE so cheats turn on:",
+        "         map c1m1_hotel      (use the chapter's own name)",
+        "       Loading from the lobby/campaign menu keeps cheats OFF.",
+        "    3. In-game, run:  exec flashlight_bright.cfg",
+        "       (or once:  bind l \"exec flashlight_bright.cfg\")",
+        "  Many custom/workshop maps auto-enable cheats when loaded via",
+        "  the console -- if a map says so on screen, this cfg will apply.",
+        "  Where cheats stay off, the console prints 'cheat cvar' and only",
+        "  the texture beam is used.",
     ]
     lines += [
         "",
@@ -566,7 +598,8 @@ def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
 # Generation pipeline (GUI-independent, used by the CLI and tests too)
 # ---------------------------------------------------------------------------
 
-def generate_vpk(brightness, range_pct, hue_deg, out_dir, tint_enabled=True):
+def generate_vpk(brightness, range_pct, hue_deg, out_dir, width=100,
+                 tint_enabled=True):
     """Build and write the .vpk (and a README.txt beside it).
 
     Returns (vpk_path, message) on success; raises on failure.
@@ -575,7 +608,7 @@ def generate_vpk(brightness, range_pct, hue_deg, out_dir, tint_enabled=True):
     if not os.path.isdir(out_dir):
         raise ValueError("Output folder does not exist: %s" % out_dir)
 
-    cvars = map_sliders_to_cvars(brightness, range_pct)
+    cvars = map_sliders_to_cvars(brightness, range_pct, width)
 
     tinted = bool(tint_enabled) and PIL_AVAILABLE
     if tint_enabled and not PIL_AVAILABLE:
@@ -596,9 +629,10 @@ def generate_vpk(brightness, range_pct, hue_deg, out_dir, tint_enabled=True):
         "cfg/flashlight_bright.cfg": build_cfg_text(cvars).encode("utf-8"),
     }
     if tinted:
-        # Brightness is baked into the cookie as well as the cfg -- the
-        # texture is the one control cheat-gated servers can't ignore.
-        cookie = build_cookie_image(hue_deg, brightness)
+        # Width + Brightness are baked into the cookie as well as the cfg --
+        # the texture is the one control cheat-gated servers can't ignore, so
+        # a wide cookie still lights more of the (fixed) cone without cheats.
+        cookie = build_cookie_image(hue_deg, brightness, width)
         files["materials/effects/flashlight001.vtf"] = build_vtf(cookie)
 
     readme = build_readme(cvars, hue_deg, tinted, tint_note, brightness)
@@ -650,6 +684,7 @@ def run_gui():
 
             self.brightness = tk.DoubleVar(value=70.0)
             self.hue = tk.DoubleVar(value=40.0)
+            self.width = tk.DoubleVar(value=60.0)
             self.range_ = tk.DoubleVar(value=55.0)
             self.out_dir = tk.StringVar(value=os.getcwd())
             self.tint_on = tk.BooleanVar(value=PIL_AVAILABLE)
@@ -672,6 +707,7 @@ def run_gui():
             row = self._add_slider(row, "Brightness", self.brightness,
                                    0, 100, "%")
             row = self._add_slider(row, "Hue", self.hue, 0, 360, "°")
+            row = self._add_slider(row, "Width", self.width, 0, 100, "%")
             row = self._add_slider(row, "Range", self.range_, 0, 100, "%")
 
             self.cvar_line = tk.Label(root, text="", bg=BG, fg=MUTED,
@@ -682,7 +718,8 @@ def run_gui():
 
             self.tint_check = tk.Checkbutton(
                 root,
-                text="Bake brightness + hue into beam texture (needs Pillow)",
+                text="Bake width + brightness + hue into beam texture "
+                     "(needs Pillow)",
                 variable=self.tint_on, command=self._on_change,
                 bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
                 selectcolor=ACCENT, anchor="w")
@@ -778,6 +815,7 @@ def run_gui():
                 _, msg = generate_vpk(self.brightness.get(),
                                       self.range_.get(), self.hue.get(),
                                       self.out_dir.get(),
+                                      width=self.width.get(),
                                       tint_enabled=self.tint_on.get())
                 self.status.configure(text=msg, fg="#7fd18a")
             except Exception as exc:
@@ -804,24 +842,23 @@ def run_gui():
 
             bright = self.brightness.get() / 100.0
             rng = self.range_.get() / 100.0
+            wd = self.width.get() / 100.0
             cvars = map_sliders_to_cvars(self.brightness.get(),
-                                         self.range_.get())
+                                         self.range_.get(), self.width.get())
             self.cvar_line.configure(text="  ".join(
                 "%s %s" % (k.replace("r_flashlight", ""), v)
                 for k, v in cvars.items()))
 
             ox, oy = 36, self.CANVAS_H / 2
-            # Beam length tracks the range slider; overall value tracks
-            # brightness (floored so the beam never vanishes entirely).
+            # Beam length tracks Range, cone spread tracks Width (via the fov
+            # cvar + texture stretch), intensity tracks Brightness (floored so
+            # the beam never vanishes). This is a side view, so the drawn cone
+            # spread reads as the vertical beam extent.
             length = 90 + (self.CANVAS_W - 100 - 90) * rng
             value = 0.25 + 0.75 * bright
-            # Brightness also widens the lit share of the projection cone
-            # (the cookie plateau grows and stretches vertically), so the
-            # preview cone -- a side view, where spread = vertical beam
-            # extent -- opens up with it.
-            v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * bright
+            v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * wd
             half_angle = math.radians(cvars["r_flashlightfov"]) / 2 \
-                * (0.52 + 0.28 * bright) * v_stretch
+                * 0.62 * v_stretch
 
             # Ambient spill: a dim layered glow around the flashlight itself.
             spill = 24 + 34 * bright
@@ -882,7 +919,9 @@ def main(argv=None):
     ap.add_argument("--brightness", type=float, default=70,
                     help="0-100 (default 70)")
     ap.add_argument("--range", dest="range_pct", type=float, default=55,
-                    help="0-100 (default 55)")
+                    help="0-100 reach/length (default 55)")
+    ap.add_argument("--width", type=float, default=60,
+                    help="0-100 cone width (default 60)")
     ap.add_argument("--hue", type=float, default=40,
                     help="0-360 degrees (default 40)")
     ap.add_argument("--out", default=".", help="output folder (default .)")
@@ -892,7 +931,8 @@ def main(argv=None):
 
     if args.nogui:
         _, msg = generate_vpk(args.brightness, args.range_pct, args.hue,
-                              args.out, tint_enabled=not args.no_tint)
+                              args.out, width=args.width,
+                              tint_enabled=not args.no_tint)
         print(msg)
         return 0
 
