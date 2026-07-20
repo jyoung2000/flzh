@@ -34,7 +34,7 @@ containing:
 
 | File in VPK | Purpose |
 |---|---|
-| `materials/effects/flashlight001.vtf` | Spotlight cookie (a real VTF v7.2 written in pure Python) replacing the stock beam texture, with **brightness, width, and hue baked in** — at high brightness the lit shape grows from a soft disc to a rounded square spanning nearly the whole projection cone. Applies automatically while the addon is enabled and works even where cvars are cheat-gated. |
+| `materials/effects/flashlight001.vtf` | Spotlight cookie (a real VTF v7.2 written in pure Python) replacing the stock beam texture, with **brightness, width, and hue baked in** — at high brightness the lit shape grows from a soft disc to a full-height portrait rectangle spanning nearly the whole projection cone for maximum ceiling/floor coverage. Applies automatically while the addon is enabled and works even where cvars are cheat-gated. |
 | `cfg/flashlight_bright.cfg` | Optional extra kick: range/attenuation cvars (`r_flashlightfar`, `r_flashlightlinear`, …). Apply in-game with `exec flashlight_bright.cfg` in the developer console; most are cheat-gated outside single player / local servers. |
 | `addoninfo.txt`, `readme.txt` | Addon metadata + install/usage notes. |
 

@@ -166,9 +166,17 @@ SHAPE_POW_MIN = 2.0      # superellipse exponent at brightness 0: 2 = circle
 SHAPE_POW_MAX = 12.0     # ...at brightness 100: the frustum cross-section is
                          # SQUARE (texture mapped edge-to-edge), so a circle
                          # inscribes it and wastes the corners. Raising the
-                         # exponent morphs the shape toward a rounded square
-                         # that covers ~97% of the frustum -- the widest beam
-                         # possible without the cheat-gated fov cvar.
+                         # exponent morphs the shape toward a rounded
+                         # rectangle that covers ~97% of the frustum -- the
+                         # widest beam possible without the cheat-gated fov.
+V_STRETCH_MAX = 1.15     # vertical axis scale at brightness 100 (1.0 at 0).
+                         # >1 stretches the lit shape past the top/bottom of
+                         # the texture, so the beam runs full-bleed to the
+                         # frustum's upper and lower edges (hard edge there,
+                         # soft rims left/right): a portrait rectangle that
+                         # grabs the most ceiling and floor the fixed cone
+                         # allows. Raise toward ~1.3 for an even squarer
+                         # top/bottom edge; 1.0 restores the symmetric shape.
 GAIN_MIN = 0.55          # overall luminance scale at brightness 0
 GAIN_MAX = 1.00          # at brightness 100 the center hits pure 255 white
 CORE_WHITENESS = 0.70    # how strongly the hot region desaturates to white
@@ -200,6 +208,7 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
     plateau = PLATEAU_MIN + (PLATEAU_MAX - PLATEAU_MIN) * b
     gain = GAIN_MIN + (GAIN_MAX - GAIN_MIN) * b
     shape_pow = SHAPE_POW_MIN + (SHAPE_POW_MAX - SHAPE_POW_MIN) * b
+    v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * b
     tint = hue_to_rgb(hue_deg)
     half = size / 2.0
     pixels = []
@@ -208,10 +217,12 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
             # Superellipse "radius", normalized so 1.0 lands just inside the
             # bitmap edge midpoints: exponent 2 is a plain circle, higher
             # exponents bulge toward the corners of the square frustum.
-            # Corners always sit at r > 1, so they stay black at any
-            # brightness and the projection keeps a (slightly) rounded edge.
+            # Dividing the vertical term by v_stretch elongates the shape
+            # upward/downward so it overshoots the bitmap and clips to a
+            # full-height rectangle. Corners still sit at r > 1, so they
+            # stay black and the projection keeps rounded corners.
             nx = abs(x - half + 0.5) / (half - 2.0)
-            ny = abs(y - half + 0.5) / (half - 2.0)
+            ny = abs(y - half + 0.5) / (half - 2.0) / v_stretch
             r = (nx ** shape_pow + ny ** shape_pow) ** (1.0 / shape_pow)
             if r >= 1.0:
                 intensity = 0.0
@@ -491,11 +502,12 @@ def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
             "  by this texture, so the brighter/flatter cookie brightens",
             "  the flashlight everywhere -- no console commands, and it",
             "  cannot be blocked by cheat-gated cvars. At high brightness",
-            "  the lit shape widens from a disc to a rounded square that",
-            "  spans nearly the flashlight's entire projection cone: the",
-            "  widest beam possible without cheats (the cone itself is",
-            "  fixed by the engine at ~45 degrees; only the cfg below can",
-            "  exceed that, where cheats allow).",
+            "  the lit shape widens from a disc to a full-height portrait",
+            "  rectangle spanning nearly the flashlight's entire projection",
+            "  cone, top to bottom, for maximum ceiling and floor coverage:",
+            "  the widest/tallest beam possible without cheats (the cone",
+            "  itself is fixed by the engine at ~45 degrees; only the cfg",
+            "  below can exceed that, where cheats allow).",
         ]
     else:
         lines += ["  " + ln for ln in tint_note.splitlines()]
@@ -791,9 +803,12 @@ def run_gui():
             length = 90 + (self.CANVAS_W - 100 - 90) * rng
             value = 0.25 + 0.75 * bright
             # Brightness also widens the lit share of the projection cone
-            # (the cookie plateau grows), so the preview cone opens up too.
+            # (the cookie plateau grows and stretches vertically), so the
+            # preview cone -- a side view, where spread = vertical beam
+            # extent -- opens up with it.
+            v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * bright
             half_angle = math.radians(cvars["r_flashlightfov"]) / 2 \
-                * (0.52 + 0.28 * bright)
+                * (0.52 + 0.28 * bright) * v_stretch
 
             # Ambient spill: a dim layered glow around the flashlight itself.
             spill = 24 + 34 * bright
