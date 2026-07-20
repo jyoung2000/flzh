@@ -169,14 +169,21 @@ SHAPE_POW_MAX = 12.0     # ...at brightness 100: the frustum cross-section is
                          # exponent morphs the shape toward a rounded
                          # rectangle that covers ~97% of the frustum -- the
                          # widest beam possible without the cheat-gated fov.
-V_STRETCH_MAX = 1.15     # vertical axis scale at brightness 100 (1.0 at 0).
+V_STRETCH_MAX = 1.22     # vertical axis scale at brightness 100 (1.0 at 0).
                          # >1 stretches the lit shape past the top/bottom of
                          # the texture, so the beam runs full-bleed to the
-                         # frustum's upper and lower edges (hard edge there,
-                         # soft rims left/right): a portrait rectangle that
-                         # grabs the most ceiling and floor the fixed cone
-                         # allows. Raise toward ~1.3 for an even squarer
-                         # top/bottom edge; 1.0 restores the symmetric shape.
+                         # frustum's upper and lower edges. Kept > H_STRETCH so
+                         # the beam stays a taller-than-wide portrait shape for
+                         # more ceiling/floor. Raise toward ~1.3 for an even
+                         # squarer top/bottom edge; 1.0 = no vertical stretch.
+H_STRETCH_MAX = 1.12     # horizontal axis scale at brightness 100 (1.0 at 0).
+                         # Same idea sideways: at max brightness the lit shape
+                         # also overshoots the left/right texture edges, so the
+                         # rectangle reaches ALL FOUR frustum edges -- ~100% of
+                         # the projection cone lit, the absolute non-cheat cap.
+                         # The frustum's angular width itself is fixed by the
+                         # engine (r_flashlightfov, cheat-gated); nothing
+                         # texture-side casts light beyond it.
 GAIN_MIN = 0.55          # overall luminance scale at brightness 0
 GAIN_MAX = 1.00          # at brightness 100 the center hits pure 255 white
 CORE_WHITENESS = 0.70    # how strongly the hot region desaturates to white
@@ -195,11 +202,15 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
     """Build the tinted spotlight cookie as a Pillow RGBA image.
 
     Shape: a flat full-intensity plateau (sized by the brightness slider)
-    with a smoothstep roll-off to pure black at the border. The border MUST
-    be black -- with texture clamping it defines the beam edge; any non-black
-    rim would smear light across the whole cone. The center is white-hot,
-    with the hue tint strongest in the roll-off rim (which is also how real
-    colored lights read, and what the preview canvas mimics).
+    with a smoothstep roll-off toward the border. At low/mid brightness the
+    rim rolls off to pure black, giving a soft-edged beam. At high brightness
+    the plateau + axis stretch push the lit area past the texture edges, so
+    the beam fills the whole projection frustum with a crisp rectangular
+    edge. That is safe here: the engine bounds the flashlight to its frustum
+    and the CLAMPS/CLAMPT flags stop the cookie tiling, so a bright edge just
+    ends cleanly at the cone boundary (confirmed in-game) rather than
+    smearing across the scene. The center is white-hot, with the hue tint
+    strongest in the rim, matching the preview canvas.
     """
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow is not installed; cannot build the cookie")
@@ -209,6 +220,7 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
     gain = GAIN_MIN + (GAIN_MAX - GAIN_MIN) * b
     shape_pow = SHAPE_POW_MIN + (SHAPE_POW_MAX - SHAPE_POW_MIN) * b
     v_stretch = 1.0 + (V_STRETCH_MAX - 1.0) * b
+    h_stretch = 1.0 + (H_STRETCH_MAX - 1.0) * b
     tint = hue_to_rgb(hue_deg)
     half = size / 2.0
     pixels = []
@@ -217,11 +229,12 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
             # Superellipse "radius", normalized so 1.0 lands just inside the
             # bitmap edge midpoints: exponent 2 is a plain circle, higher
             # exponents bulge toward the corners of the square frustum.
-            # Dividing the vertical term by v_stretch elongates the shape
-            # upward/downward so it overshoots the bitmap and clips to a
-            # full-height rectangle. Corners still sit at r > 1, so they
-            # stay black and the projection keeps rounded corners.
-            nx = abs(x - half + 0.5) / (half - 2.0)
+            # Dividing each term by its stretch elongates the shape so it
+            # overshoots the bitmap and clips to a full-bleed rectangle on
+            # both axes -- at max brightness the lit area reaches every
+            # frustum edge. The soft roll-off survives only where a stretch
+            # stays near 1.0.
+            nx = abs(x - half + 0.5) / (half - 2.0) / h_stretch
             ny = abs(y - half + 0.5) / (half - 2.0) / v_stretch
             r = (nx ** shape_pow + ny ** shape_pow) ** (1.0 / shape_pow)
             if r >= 1.0:
