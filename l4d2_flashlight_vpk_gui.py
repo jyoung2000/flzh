@@ -156,12 +156,19 @@ def build_cfg_text(cvars):
 
 COOKIE_SIZE = 256        # texture resolution (power of two)
 PLATEAU_MIN = 0.30       # radius fraction at FULL intensity, brightness 0...
-PLATEAU_MAX = 0.86       # ...and brightness 100. The engine stretches this
+PLATEAU_MAX = 0.94       # ...and brightness 100. The engine stretches this
                          # texture across the flashlight's whole projection
                          # cone, so dark edge texels are wasted beam angle --
-                         # at max brightness the lit disc runs nearly to the
+                         # at max brightness the lit area runs nearly to the
                          # texture border and fills almost the entire cone.
-                         # (1.0 would be a hard-edged disc with no soft rim.)
+                         # (1.0 would be a hard-edged shape with no soft rim.)
+SHAPE_POW_MIN = 2.0      # superellipse exponent at brightness 0: 2 = circle
+SHAPE_POW_MAX = 12.0     # ...at brightness 100: the frustum cross-section is
+                         # SQUARE (texture mapped edge-to-edge), so a circle
+                         # inscribes it and wastes the corners. Raising the
+                         # exponent morphs the shape toward a rounded square
+                         # that covers ~97% of the frustum -- the widest beam
+                         # possible without the cheat-gated fov cvar.
 GAIN_MIN = 0.55          # overall luminance scale at brightness 0
 GAIN_MAX = 1.00          # at brightness 100 the center hits pure 255 white
 CORE_WHITENESS = 0.70    # how strongly the hot region desaturates to white
@@ -192,13 +199,20 @@ def build_cookie_image(hue_deg, brightness=100.0, size=COOKIE_SIZE):
     b = max(0.0, min(100.0, float(brightness))) / 100.0
     plateau = PLATEAU_MIN + (PLATEAU_MAX - PLATEAU_MIN) * b
     gain = GAIN_MIN + (GAIN_MAX - GAIN_MIN) * b
+    shape_pow = SHAPE_POW_MIN + (SHAPE_POW_MAX - SHAPE_POW_MIN) * b
     tint = hue_to_rgb(hue_deg)
     half = size / 2.0
     pixels = []
     for y in range(size):
         for x in range(size):
-            # Radius normalized so 1.0 lands just inside the bitmap edge.
-            r = math.hypot(x - half + 0.5, y - half + 0.5) / (half - 2.0)
+            # Superellipse "radius", normalized so 1.0 lands just inside the
+            # bitmap edge midpoints: exponent 2 is a plain circle, higher
+            # exponents bulge toward the corners of the square frustum.
+            # Corners always sit at r > 1, so they stay black at any
+            # brightness and the projection keeps a (slightly) rounded edge.
+            nx = abs(x - half + 0.5) / (half - 2.0)
+            ny = abs(y - half + 0.5) / (half - 2.0)
+            r = (nx ** shape_pow + ny ** shape_pow) ** (1.0 / shape_pow)
             if r >= 1.0:
                 intensity = 0.0
             elif r <= plateau:
@@ -476,7 +490,12 @@ def build_readme(cvars, hue_deg, tinted, tint_note, brightness=None):
             round(hue_deg),
             "  by this texture, so the brighter/flatter cookie brightens",
             "  the flashlight everywhere -- no console commands, and it",
-            "  cannot be blocked by cheat-gated cvars.",
+            "  cannot be blocked by cheat-gated cvars. At high brightness",
+            "  the lit shape widens from a disc to a rounded square that",
+            "  spans nearly the flashlight's entire projection cone: the",
+            "  widest beam possible without cheats (the cone itself is",
+            "  fixed by the engine at ~45 degrees; only the cfg below can",
+            "  exceed that, where cheats allow).",
         ]
     else:
         lines += ["  " + ln for ln in tint_note.splitlines()]
@@ -771,7 +790,10 @@ def run_gui():
             # brightness (floored so the beam never vanishes entirely).
             length = 90 + (self.CANVAS_W - 100 - 90) * rng
             value = 0.25 + 0.75 * bright
-            half_angle = math.radians(cvars["r_flashlightfov"]) / 2 * 0.62
+            # Brightness also widens the lit share of the projection cone
+            # (the cookie plateau grows), so the preview cone opens up too.
+            half_angle = math.radians(cvars["r_flashlightfov"]) / 2 \
+                * (0.52 + 0.28 * bright)
 
             # Ambient spill: a dim layered glow around the flashlight itself.
             spill = 24 + 34 * bright
